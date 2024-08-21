@@ -1,0 +1,9 @@
+flask
+assemblyai
+aiohttp
+langchain-google-genai
+gtts
+playsound
+transformers
+tempfile
+python-dotenv
