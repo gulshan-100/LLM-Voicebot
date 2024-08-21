@@ -11,10 +11,14 @@ from playsound import playsound
 from llm import generate_llm_response
 from stt import transcribe_audio
 from tts import generate_audio
+from dotenv import load_dotenv, find_dotenv
 
 app = Flask(__name__)
 
 language = 'en'
+
+
+load_dotenv(find_dotenv())
 
 @app.route('/')
 def index():
