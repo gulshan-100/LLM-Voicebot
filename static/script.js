@@ -1,16 +1,19 @@
-let mediaRecorder;
-let audioChunks = [];
-let isRecording = false;
-
 const recordButton = document.getElementById('recordButton');
 const statusElement = document.getElementById('status');
 const chatMessages = document.getElementById('chatMessages');
 
+let audioQueue = [];
+let isPlaying = false;
+
+let mediaRecorder;
+let audioChunks = [];
+let isRecording = false;
+
 recordButton.addEventListener('click', toggleRecording);
 
-async function toggleRecording() {
+function toggleRecording() {
     if (!isRecording) {
-        await startRecording();
+        startRecording();
     } else {
         stopRecording();
     }
@@ -29,9 +32,9 @@ async function startRecording() {
 
         mediaRecorder.start();
         isRecording = true;
-        recordButton.textContent = 'Stop Recording';
+        recordButton.innerHTML = '🎤 Stop Recording';
         statusElement.textContent = 'Recording...';
-        addVoiceMessage('user');
+        addMessage('user', '🎤 Recording...');
     } catch (error) {
         console.error('Error starting recording:', error);
         statusElement.textContent = 'Error: Could not start recording';
@@ -42,7 +45,7 @@ function stopRecording() {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         mediaRecorder.stop();
         isRecording = false;
-        recordButton.textContent = 'Start Recording';
+        recordButton.innerHTML = '🎤 Start Recording';
         statusElement.textContent = 'Processing...';
     }
 }
@@ -53,7 +56,7 @@ async function sendAudioToServer() {
     formData.append('file', audioBlob, 'recording.wav');
 
     try {
-        const response = await fetch('/process_audio', {
+        const response = await fetch('/process_audio_stream', {
             method: 'POST',
             body: formData
         });
@@ -62,23 +65,77 @@ async function sendAudioToServer() {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        const data = await response.json();
-        statusElement.textContent = 'Response ready';
+        statusElement.textContent = 'Processing (streaming)...';
 
-        addVoiceMessage('bot');
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        const audio = new Audio('/audio/' + data.audio_file);
-        audio.play();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
 
-        audio.onended = async () => {
-            await fetch('/cleanup', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ filename: data.audio_file }),
-            });
-        };
+            // SSE-style messages are separated by double newline
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop();
+
+            for (const part of parts) {
+                if (!part.trim()) continue;
+                const lines = part.split('\n');
+                let event = 'message';
+                let data = '';
+                for (const line of lines) {
+                    if (line.startsWith('event:')) {
+                        event = line.replace('event:', '').trim();
+                    } else if (line.startsWith('data:')) {
+                        data += line.replace('data:', '').trim();
+                    }
+                }
+
+                try {
+                    const payload = JSON.parse(data);
+                    if (event === 'transcription') {
+                        statusElement.textContent = 'Transcription ready';
+                        addMessage('user', payload.text);
+                    } else if (event === 'llm_response_start') {
+                        statusElement.textContent = 'Generating response...';
+                        const botMsg = document.createElement('div');
+                        botMsg.classList.add('bot-message');
+                        botMsg.dataset.streaming = 'true';
+                        botMsg.textContent = '';
+                        chatMessages.appendChild(botMsg);
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        window.__currentBotStreamElement = botMsg;
+                    } else if (event === 'llm_token') {
+                        const token = payload.token || '';
+                        const el = window.__currentBotStreamElement;
+                        if (el) {
+                            el.textContent += token;
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        }
+                    } else if (event === 'llm_response') {
+                        statusElement.textContent = 'Response ready';
+                        const el = window.__currentBotStreamElement;
+                        if (el) {
+                            el.dataset.streaming = 'false';
+                            delete window.__currentBotStreamElement;
+                        }
+                    } else if (event === 'audio_chunk') {
+                        const audioData = Uint8Array.from(atob(payload.data), c => c.charCodeAt(0));
+                        const blob = new Blob([audioData], { type: 'audio/mpeg' });
+                        const audio = new Audio(URL.createObjectURL(blob));
+                        playAudioSequentially(audio);
+                    } else if (event === 'error') {
+                        statusElement.textContent = 'Error: ' + payload.error;
+                        addMessage('bot', 'Error: ' + payload.error);
+                    }
+                } catch (err) {
+                    console.error('Failed parse SSE payload', err, data);
+                }
+            }
+        }
+
     } catch (error) {
         console.error('Error:', error);
         statusElement.textContent = 'Error: ' + error.message;
@@ -87,18 +144,33 @@ async function sendAudioToServer() {
     audioChunks = [];
 }
 
-function addVoiceMessage(speaker) {
-    const messageContainer = document.createElement('div');
-    messageContainer.classList.add('voice-message', speaker + '-voice');
-
-    const voiceIcon = document.createElement('div');
-    voiceIcon.classList.add('voice-icon');
-
-    const voiceLine = document.createElement('div');
-    voiceLine.classList.add('voice-line');
-
-    messageContainer.appendChild(voiceIcon);
-    messageContainer.appendChild(voiceLine);
-    chatMessages.appendChild(messageContainer);
+function addMessage(speaker, text) {
+    const msg = document.createElement('div');
+    msg.textContent = text;
+    msg.classList.add(speaker + '-message');
+    chatMessages.appendChild(msg);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Add welcome message
+addMessage('bot', 'Hello! I\'m your AI voice assistant. Click the microphone to start recording.');
+
+function playAudioSequentially(audio) {
+    audioQueue.push(audio);
+    if (!isPlaying) {
+        playNextAudio();
+    }
+}
+
+function playNextAudio() {
+    if (audioQueue.length > 0) {
+        isPlaying = true;
+        const audio = audioQueue.shift();
+        audio.onended = () => {
+            playNextAudio();
+        };
+        audio.play();
+    } else {
+        isPlaying = false;
+    }
 }

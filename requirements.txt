@@ -1,9 +1,5 @@
 flask
-assemblyai
-aiohttp
-langchain-google-genai
-gtts
+openai
 playsound
-transformers
-tempfile
 python-dotenv
+httpx[http2]
