@@ -10,7 +10,9 @@ It is a Voicebot that processes audio by transcribing them, generating responses
 
 
 ## Demo Video
-[Watch the demo video here](https://github.com/user-attachments/assets/69db1566-1575-4edf-a485-98cf2ababe1f)
+[Watch the demo video here](https://github.com/user-attachments/assets/1e7a1aab-9c07-4402-8fd3-1b66e3ef7805)
+
+
 
 
 ## SET UP 
